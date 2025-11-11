@@ -20,8 +20,18 @@ import org.springframework.security.web.authentication.AuthenticationSuccessHand
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.authentication.rememberme.JdbcTokenRepositoryImpl;
 import org.springframework.security.web.authentication.rememberme.PersistentTokenRepository;
-
 import javax.sql.DataSource;
+
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import com.busanit501.boot501.security.filter.APILoginFilter;
+import com.busanit501.boot501.security.filter.TokenCheckFilter;
+import com.busanit501.boot501.security.filter.RefreshTokenFilter;
+import com.busanit501.boot501.security.handler.APILoginSuccessHandler;
+import com.busanit501.boot501.util.JWTUtil;
+import com.busanit501.boot501.security.APIUserDetailsService;  //  1번에 있는 클래스
+import org.springframework.core.annotation.Order; //  추가됨
 
 @Log4j2
 @Configuration
@@ -37,14 +47,27 @@ public class CustomSecurityConfig {
     //ip 에서 분당 요청 횟수 제한
     private final RateLimitingFilter rateLimitingFilter;
 
+    //  추가 의존성 (JWT 관련)
+    private final JWTUtil jwtUtil;
+    private final APIUserDetailsService apiUserDetailsService;
+//    private final AuthenticationManager authenticationManager;
+
     // 평문 패스워드를 해시 함수 이용해서 인코딩 해주는 도구 주입.
     @Bean
     public PasswordEncoder passwordEncoder() {
         return new BCryptPasswordEncoder();
     }
 
+    //  AuthenticationManager 등록
     @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration configuration) throws Exception {
+        return configuration.getAuthenticationManager();
+    }
+
+    //  AuthenticationConfiguration 추가 (configuration 인식 오류 해결)
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http,
+                                                   AuthenticationConfiguration configuration) throws Exception {
         log.info("시큐리티 동작 확인 ====CustomSecurityConfig======================");
         // 로그인 없이 자동 로그인 확인
         // 빈 설정.
@@ -52,6 +75,10 @@ public class CustomSecurityConfig {
 
         http.formLogin(
                 formLogin -> formLogin.loginPage("/member/login").permitAll()
+                        // 🔧 정적 HTML 폼 사용을 위한 로그인 처리 URL & 파라미터명 매핑
+                        .loginProcessingUrl("/login")
+                        .usernameParameter("mid")
+                        .passwordParameter("mpw")
         );
 
         // 로그 아웃 설정.
@@ -68,20 +95,16 @@ public class CustomSecurityConfig {
         // 기본은 csrf 설정이 on, 작업시에는 끄고 작업하기.
         http.csrf(httpSecurityCsrfConfigurer -> httpSecurityCsrfConfigurer.disable());
 
-        // 특정 페이지에 접근 권한 설정.
-        http.authorizeRequests()
-                // 정적 자원 모두 허용.
+        // [수정 후: authorizeHttpRequests로 통일, 람다식 구조 적용]
+        http.authorizeHttpRequests(auth -> auth
                 .requestMatchers("/css/**", "/js/**","/images/**","/images2/**").permitAll()
-                // 리스트는 기본으로 다 들어갈수 있게., 모두 허용
-                .requestMatchers("/", "/board/list","/member/join", "/login","/member/login", "/joinUser","/joinForm","/findAll","/images/**","/members/**", "/item/**").permitAll()
-                // 로그인 후 확인 하기. 권한 예제) hasRole("USER"),hasRole("ADMIN")
-                .requestMatchers("/board/register","/board/read","/board/update" ).authenticated()
-                // 권한  관리자만, 예제로 , 수정폼은 권한이 관리자여야 함.
+                .requestMatchers("/member/login.html","/member/join.html","/member/update.html").permitAll()
+                .requestMatchers("/", "/board/list","/member/join", "/login","/member/login", "/joinUser",
+                        "/joinForm","/findAll","/images/**","/members/**", "/item/**").permitAll()
+                .requestMatchers("/board/register","/board/read","/board/update").authenticated()
                 .requestMatchers("/admin/**").hasRole("ADMIN")
-                // 위의 접근 제어 목록 외의 , 다른 어떤 요청이라도 반드시 인증이 되어야 접근이 된다.
-//                .anyRequest().authenticated();
-                //확인용으로 사용하기.
-                .anyRequest().permitAll();
+                .anyRequest().permitAll() // anyRequest는 항상 마지막
+        );
 
         //403 핸들러 적용하기.
         http.exceptionHandling(
@@ -122,7 +145,29 @@ public class CustomSecurityConfig {
         // 동일 아이피에서 분당 요청 횟수 10회 제한 , 필터 설정.
         http.addFilterBefore(rateLimitingFilter, UsernamePasswordAuthenticationFilter.class);
 
+        // ===========================
+        //  JWT 기반 API 체인 추가
+        // ===========================
+        log.info("JWT 기반 API Security 설정 시작...");
 
+
+
+        // API 로그인 필터 설정
+        APILoginFilter apiLoginFilter = new APILoginFilter("/api/login");
+        apiLoginFilter.setAuthenticationManager(authenticationManager(configuration)); //  여기로 이동
+        apiLoginFilter.setAuthenticationSuccessHandler(new APILoginSuccessHandler(jwtUtil, passwordEncoder()));
+
+        // ✅ http.securityMatcher("/api/**") 체인으로 직접 설정
+        http.securityMatcher("/api/**")
+                .csrf(csrf -> csrf.disable())
+                .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/api/login", "/api/refresh").permitAll()
+                        .anyRequest().authenticated()
+                )
+                .addFilterBefore(new TokenCheckFilter(apiUserDetailsService, jwtUtil), UsernamePasswordAuthenticationFilter.class)
+                .addFilterAt(apiLoginFilter, UsernamePasswordAuthenticationFilter.class)
+                .addFilterAfter(new RefreshTokenFilter("/api/refresh", jwtUtil), TokenCheckFilter.class); //  apiHttp → http로 통합
 
     // 캐시 설정 비활성화
 //        http.headers(
