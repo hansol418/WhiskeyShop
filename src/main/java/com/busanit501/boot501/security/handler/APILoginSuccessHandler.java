@@ -74,7 +74,7 @@ public class APILoginSuccessHandler implements AuthenticationSuccessHandler {
             boolean test4 = passwordEncoder.matches("1111", memberSecurityDTO.getPassword());
             log.info("패스워드 일치 여부3 memberSecurityDTO.getMpw().equals(\"1111\"); : " + test3);
             log.info("패스워드 일치 여부4  passwordEncoder.matches(\"1111\", memberSecurityDTO.getMpw()); : " + test4);
-            response.sendRedirect("/main");
+//            response.sendRedirect("/board/list");
         }
 
     }

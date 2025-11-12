@@ -29,6 +29,19 @@ public class RateLimitingFilter extends OncePerRequestFilter {
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain)
             throws ServletException, IOException {
+        String uri = request.getRequestURI();
+        if (uri.startsWith("/css/")
+                || uri.startsWith("/js/")
+                || uri.startsWith("/images/")
+                || uri.startsWith("/api/refresh")
+                || uri.equals("/api/login")
+                || uri.equals("/member/login")
+                || uri.equals("/error")
+                || uri.equals("/")) {
+            filterChain.doFilter(request, response);
+            return;
+        }
+
         String clientIp = getClientIp(request);
 
         RateLimit rateLimit = rateLimitCache.computeIfAbsent(clientIp, k -> new RateLimit(MAX_REQUESTS, TIME_WINDOW));
